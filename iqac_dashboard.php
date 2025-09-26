@@ -8,10 +8,10 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'iqac') {
 }
 
 // --- Handle Company Update/Add ---
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
+if ($_SERVER["REQUEST_METHOD"] == "POST" && (isset($_POST['update_rating']) || isset($_POST['add_company']))) {
     if (isset($_POST['update_rating'])) {
         $company_id = intval($_POST['company_id']);
-        $new_rating = floatval($_POST['rating']); // Use floatval for decimal ratings
+        $new_rating = floatval($_POST['rating']);
         if ($new_rating >= 0 && $new_rating <= 100) {
             $stmt = $conn->prepare("UPDATE companies SET rating = ? WHERE id = ?");
             $stmt->bind_param("di", $new_rating, $company_id);
@@ -20,7 +20,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         }
     } elseif (isset($_POST['add_company'])) {
         $company_name = trim($_POST['company_name']);
-        $company_rating = floatval($_POST['company_rating']); // Use floatval for decimal ratings
+        $company_rating = floatval($_POST['company_rating']);
         if (!empty($company_name) && $company_rating >= 0 && $company_rating <= 100) {
             $stmt = $conn->prepare("INSERT INTO companies (name, rating) VALUES (?, ?) ON DUPLICATE KEY UPDATE rating=?");
             $stmt->bind_param("sdd", $company_name, $company_rating, $company_rating);
@@ -42,14 +42,12 @@ $stmt->execute();
 $companies_result = $stmt->get_result();
 $stmt->close();
 
-// --- Auto-reject applications for companies with rating < 30 ---
-// Get all applications pending IQAC approval first
+// --- MODIFIED: Auto-reject applications for companies with rating < 30 ---
 $pending_apps_sql = "SELECT a.id, a.company_name FROM applications a WHERE a.status = 'Pending IQAC Approval'";
 $pending_apps_result = $conn->query($pending_apps_sql);
 
 if ($pending_apps_result && $pending_apps_result->num_rows > 0) {
     while ($app = $pending_apps_result->fetch_assoc()) {
-        // For each application, get the company's rating
         $check_stmt = $conn->prepare("SELECT rating FROM companies WHERE name = ?");
         $check_stmt->bind_param("s", $app['company_name']);
         $check_stmt->execute();
@@ -57,9 +55,9 @@ if ($pending_apps_result && $pending_apps_result->num_rows > 0) {
         
         if ($rating_result->num_rows > 0) {
             $rating_row = $rating_result->fetch_assoc();
-            // **CORRECTED LOGIC: Check if rating is below 30**
             if ($rating_row['rating'] < 30) {
-                $status = "Rejected by IQAC";
+                // CHANGE: Set status to Rejected instead of a review status
+                $status = "Rejected"; 
                 $remark = "Auto-rejected: Company rating (" . $rating_row['rating'] . "%) is below the 30% threshold.";
                 $update_stmt = $conn->prepare("UPDATE applications SET status=?, remarks=? WHERE id=?");
                 $update_stmt->bind_param("ssi", $status, $remark, $app['id']);
@@ -71,7 +69,7 @@ if ($pending_apps_result && $pending_apps_result->num_rows > 0) {
     }
 }
 
-// --- Fetch Applications (after auto-rejection has run) ---
+// --- Fetch Applications (Pending list no longer needs the 'Pending Review' status) ---
 $pending_sql = "SELECT a.id, u.full_name, u.department, a.company_name, a.status 
                 FROM applications a 
                 JOIN users u ON a.student_id = u.id 
@@ -82,7 +80,7 @@ $pending_result = $conn->query($pending_sql);
 $reviewed_sql = "SELECT a.id, u.full_name, u.department, a.company_name, a.status 
                  FROM applications a 
                  JOIN users u ON a.student_id = u.id 
-                 WHERE a.status LIKE '%IQAC%' AND a.status!='Pending IQAC Approval'
+                 WHERE a.status NOT IN ('Pending Staff Advisor', 'Pending HOD Approval', 'Pending DQAC Approval', 'Pending IQAC Approval', 'Pending Review (Low Rating)')
                  ORDER BY a.submitted_at DESC";
 $reviewed_result = $conn->query($reviewed_sql);
 
@@ -125,7 +123,7 @@ body { margin:0; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Robo
 .add-company-form button{background-color:var(--navy-blue); color:white; border:none; padding:10px 15px; border-radius:5px; cursor:pointer;}
 .status-approved{color:#22c55e; font-weight:600;}
 .status-pending{color:#f59e0b; font-weight:600;}
-.status-rejected{color:#ef4444; font-weight:600;}
+.status-rejected, .status-low-rating {color:#ef4444; font-weight:600;} /* Added new class */
 .view-btn{background-color:#0a2342;color:#fff;padding:6px 12px;border-radius:5px;text-decoration:none; font-size:0.9em;}
 .view-btn:hover{background-color:#1e3a8a;}
 </style>
@@ -148,91 +146,99 @@ body { margin:0; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Robo
 <h1 class="page-title">IQAC Dashboard</h1>
 
 <div class="card">
-<div class="card-header">
-<h2>Company Ratings</h2>
-<form class="search-form" method="GET" action="iqac_dashboard.php">
-<input type="text" name="search" placeholder="Search company..." value="<?php echo htmlspecialchars($search_term); ?>">
-<button type="submit"><i class="fa-solid fa-search"></i></button>
-</form>
-</div>
-<div style="max-height:350px; overflow-y:auto;">
-<table class="data-table">
-<thead><tr><th>Company Name</th><th>Current Rating (%)</th><th>New Rating</th><th>Action</th></tr></thead>
-<tbody>
-<?php if ($companies_result->num_rows > 0): ?>
-    <?php while($row = $companies_result->fetch_assoc()): ?>
-    <tr>
-    <td><?php echo htmlspecialchars($row['name']); ?></td>
-    <td><?php echo htmlspecialchars($row['rating']); ?>%</td>
-    <form method="POST" action="iqac_dashboard.php">
-    <input type="hidden" name="company_id" value="<?php echo $row['id']; ?>">
-    <td><input class="rating-input" type="number" step="0.01" name="rating" value="<?php echo $row['rating']; ?>" min="0" max="100" required></td>
-    <td><button type="submit" name="update_rating" class="update-btn">Update</button></td>
+    <div class="card-header">
+        <h2>Company Ratings</h2>
+        <form class="search-form" method="GET" action="iqac_dashboard.php">
+            <input type="text" name="search" placeholder="Search company..." value="<?php echo htmlspecialchars($search_term); ?>">
+            <button type="submit"><i class="fa-solid fa-search"></i></button>
+        </form>
+    </div>
+    <div style="max-height:350px; overflow-y:auto;">
+        <table class="data-table">
+            <thead><tr><th>Company Name</th><th>Current Rating (%)</th><th>New Rating</th><th>Action</th></tr></thead>
+            <tbody>
+            <?php if ($companies_result->num_rows > 0): ?>
+                <?php while($row = $companies_result->fetch_assoc()): ?>
+                <tr>
+                    <td><?php echo htmlspecialchars($row['name']); ?></td>
+                    <td><?php echo htmlspecialchars($row['rating']); ?>%</td>
+                    <form method="POST" action="iqac_dashboard.php">
+                    <input type="hidden" name="company_id" value="<?php echo $row['id']; ?>">
+                    <td><input class="rating-input" type="number" step="0.01" name="rating" value="<?php echo $row['rating']; ?>" min="0" max="100" required></td>
+                    <td><button type="submit" name="update_rating" class="update-btn">Update</button></td>
+                    </form>
+                </tr>
+                <?php endwhile; ?>
+            <?php else: ?>
+                <tr><td colspan="4" style="text-align: center;">No companies found.</td></tr>
+            <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+    <form class="add-company-form" method="POST" action="iqac_dashboard.php">
+        <input type="text" name="company_name" placeholder="New Company Name" required>
+        <input type="number" step="0.01" name="company_rating" placeholder="Rating 0-100" min="0" max="100" required>
+        <button type="submit" name="add_company">Add Company</button>
     </form>
-    </tr>
-    <?php endwhile; ?>
-<?php else: ?>
-    <tr><td colspan="4" style="text-align: center;">No companies found.</td></tr>
-<?php endif; ?>
-</tbody>
-</table>
-</div>
-<form class="add-company-form" method="POST" action="iqac_dashboard.php">
-<input type="text" name="company_name" placeholder="New Company Name" required>
-<input type="number" step="0.01" name="company_rating" placeholder="Rating 0-100" min="0" max="100" required>
-<button type="submit" name="add_company">Add Company</button>
-</form>
 </div>
 
 <div class="card">
-<div class="card-header"><h2>Pending IQAC Approvals</h2></div>
-<table class="data-table">
-<thead><tr><th>Student</th><th>Department</th><th>Company</th><th>Status</th><th>Action</th></tr></thead>
-<tbody>
-<?php if($pending_result->num_rows > 0): ?>
-<?php while($row = $pending_result->fetch_assoc()): ?>
-<tr>
-<td><?php echo htmlspecialchars($row['full_name']); ?></td>
-<td><?php echo htmlspecialchars($row['department']); ?></td>
-<td><?php echo htmlspecialchars($row['company_name']); ?></td>
-<td><span class="status-pending"><?php echo htmlspecialchars($row['status']); ?></span></td>
-<td><a class="view-btn" href="view_application.php?id=<?php echo $row['id']; ?>">View</a></td>
-</tr>
-<?php endwhile; ?>
-<?php else: ?>
-<tr><td colspan="5" style="text-align:center;">No pending applications.</td></tr>
-<?php endif; ?>
-</tbody>
-</table>
+    <div class="card-header"><h2>Pending IQAC Approvals</h2></div>
+    <table class="data-table">
+        <thead><tr><th>Student</th><th>Department</th><th>Company</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody>
+        <?php if($pending_result->num_rows > 0): ?>
+            <?php while($row = $pending_result->fetch_assoc()): ?>
+            <tr>
+                <td><?php echo htmlspecialchars($row['full_name']); ?></td>
+                <td><?php echo htmlspecialchars($row['department']); ?></td>
+                <td><?php echo htmlspecialchars($row['company_name']); ?></td>
+                <td>
+                    <?php 
+                    // This logic remains but will likely only show 'Pending IQAC Approval' now
+                    if ($row['status'] == 'Pending Review (Low Rating)') {
+                        echo '<span class="status-low-rating">Company Rating Low</span>';
+                    } else {
+                        echo '<span class="status-pending">' . htmlspecialchars($row['status']) . '</span>';
+                    }
+                    ?>
+                </td>
+                <td><a class="view-btn" href="view_application.php?id=<?php echo $row['id']; ?>">View</a></td>
+            </tr>
+            <?php endwhile; ?>
+        <?php else: ?>
+            <tr><td colspan="5" style="text-align:center;">No pending applications.</td></tr>
+        <?php endif; ?>
+        </tbody>
+    </table>
 </div>
 
 <div class="card">
-<div class="card-header"><h2>Reviewed Applications</h2></div>
-<table class="data-table">
-<thead><tr><th>Student</th><th>Department</th><th>Company</th><th>Status</th><th>Action</th></tr></thead>
-<tbody>
-<?php if($reviewed_result->num_rows > 0): ?>
-<?php while($row = $reviewed_result->fetch_assoc()): ?>
-<tr>
-<td><?php echo htmlspecialchars($row['full_name']); ?></td>
-<td><?php echo htmlspecialchars($row['department']); ?></td>
-<td><?php echo htmlspecialchars($row['company_name']); ?></td>
-<td>
-<?php
-$status = htmlspecialchars($row['status']);
-if(stripos($status, 'Pending') !== false){ echo "<span class='status-pending'>".$status."</span>"; }
-elseif(stripos($status, 'Approved') !== false){ echo "<span class='status-approved'>".$status."</span>"; }
-else{ echo "<span class='status-rejected'>".$status."</span>"; }
-?>
-</td>
-<td><a class="view-btn" href="view_application.php?id=<?php echo $row['id']; ?>">View</a></td>
-</tr>
-<?php endwhile; ?>
-<?php else: ?>
-<tr><td colspan="5" style="text-align:center;">No reviewed applications.</td></tr>
-<?php endif; ?>
-</tbody>
-</table>
+    <div class="card-header"><h2>Reviewed Applications</h2></div>
+    <table class="data-table">
+        <thead><tr><th>Student</th><th>Department</th><th>Company</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody>
+        <?php if($reviewed_result->num_rows > 0): ?>
+            <?php while($row = $reviewed_result->fetch_assoc()): ?>
+            <tr>
+                <td><?php echo htmlspecialchars($row['full_name']); ?></td>
+                <td><?php echo htmlspecialchars($row['department']); ?></td>
+                <td><?php echo htmlspecialchars($row['company_name']); ?></td>
+                <td>
+                    <?php
+                    $status = htmlspecialchars($row['status']);
+                    if(stripos($status, 'Approved') !== false){ echo "<span class='status-approved'>".$status."</span>"; }
+                    else { echo "<span class='status-rejected'>".$status."</span>"; }
+                    ?>
+                </td>
+                <td><a class="view-btn" href="view_application.php?id=<?php echo $row['id']; ?>">View</a></td>
+            </tr>
+            <?php endwhile; ?>
+        <?php else: ?>
+            <tr><td colspan="5" style="text-align:center;">No reviewed applications.</td></tr>
+        <?php endif; ?>
+        </tbody>
+    </table>
 </div>
 
 </main>

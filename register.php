@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Register - CET Internship Tracker</title>
     <style>
-        :root { --navy-blue: #0a2342; --light-grey: #f0f2f5; --card-bg: #ffffff; --text-primary: #1e293b; --text-secondary: #64748b; --error-color: #ef4444; }
+        :root { --navy-blue: #0a2342; --light-grey: #f0f2f5; --card-bg: #ffffff; --text-primary: #1e293b; --text-secondary: #64748b; --error-color: #ef4444; --success-color: #22c55e; }
         body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: var(--light-grey); display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px 0; }
         .auth-card { background-color: var(--card-bg); padding: 40px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); width: 100%; max-width: 400px; text-align: center; }
         h1 { margin-top: 0; color: var(--text-primary); font-size: 28px; }
@@ -15,13 +15,21 @@
         button { width: 100%; padding: 14px; background-color: var(--navy-blue); border: none; border-radius: 6px; color: #fff; font-size: 16px; cursor: pointer; margin-top: 10px; }
         .message { padding: 10px 15px; margin-bottom: 20px; border-radius: 6px; border-left: 5px solid var(--error-color); background-color: #fee2e2; color: #b91c1c; text-align: left; }
         a { color: var(--navy-blue); font-weight: 500; text-decoration: none; }
+        
+        /* --- NEW: Validation Styles --- */
+        .validation-message { font-size: 0.875rem; text-align: left; margin-top: 5px; }
+        .validation-message p { margin: 3px 0; }
+        .valid { color: var(--success-color); }
+        .invalid { color: var(--error-color); }
+        input.valid-border { border-color: var(--success-color); }
+        input.invalid-border { border-color: var(--error-color); }
     </style>
 </head>
 <body>
     <div class="auth-card">
         <h1>Create an Account</h1>
         <?php if (isset($_GET['error'])) { echo '<div class="message">'.htmlspecialchars($_GET['error']).'</div>'; } ?>
-        <form action="handle_registration.php" method="POST">
+        <form id="registrationForm" action="handle_registration.php" method="POST">
             <div class="input-group"><input type="text" name="full_name" placeholder="Full Name" required></div>
             <div class="input-group"><input type="text" name="college_id" placeholder="College ID" required></div>
             <div class="input-group"><input type="email" name="email" placeholder="Email Address" required></div>
@@ -43,13 +51,21 @@
             <div id="department-field" style="display:none;" class="input-group">
                 <select name="department" id="department-select"></select>
             </div>
-            <div class="input-group"><input type="password" name="password" placeholder="Password (min 6 chars)" required></div>
-            <div class="input-group"><input type="password" name="confirm_password" placeholder="Confirm Password" required></div>
+
+            <div class="input-group">
+                <input type="password" id="password" name="password" placeholder="Password" required>
+            </div>
+            <div class="input-group">
+                <input type="password" id="confirm_password" name="confirm_password" placeholder="Confirm Password" required>
+            </div>
+            <div id="password-message" class="validation-message"></div>
+
             <button type="submit">Register</button>
             <p style="margin-top: 20px;">Already have an account? <a href="login.php">Login here</a></p>
         </form>
     </div>
     <script>
+        // --- EXISTING SCRIPT (Department Logic) ---
         const ug_departments = ["Civil", "Electrical and Electronics", "Electrical and Computer", "Electronics & Communication", "Applied Electronics & Instrumentation", "Mechanical", "Industrial", "B.Arch", "Computer Science"];
         const pg_departments = ["MCA", "MBA", "MTECH(Structural Engineering)", "MTECH(Traffic & Transportation Engineering)", "MTECH(Hydraulics Engineering)", "MTECH(Environmental Engineering)", "MTECH(Geotechnical Engineering)", "MTECH(Geo Informatics)", "MTECH(Machine Design)", "MTECH(Propulsion Engineering)", "MTECH(Thermal Sciences)", "MTECH(Industrial Engineering)", "MTECH(Financial Engineering)", "MTECH(Manufacturing & Automation)", "MTECH(Control Systems)", "MTECH(Power Systems)", "MTECH(Guidance & Navigational Control)", "MTECH(Electrical Machines)", "MTECH(Communication Systems)", "MTECH(Applied Electronics & Instrumentation)", "MTECH(Signal Processing)", "MTECH(Micro & Nano Electronics)", "MTECH(Robotics & Automation)", "MTECH(Computer Science & Engineering)", "MTECH(Information Security)", "Urban Design (M. Arch.)", "Planning (M.Plan)"];
         
@@ -74,7 +90,95 @@
             depts.forEach(d => deptSelect.add(new Option(d, d)));
             document.getElementById('department-field').style.display = 'block';
         }
+
+        // --- NEW: REAL-TIME PASSWORD VALIDATION ---
+        document.addEventListener('DOMContentLoaded', function() {
+            const form = document.getElementById('registrationForm');
+            const password = document.getElementById('password');
+            const confirm_password = document.getElementById('confirm_password');
+            const message = document.getElementById('password-message');
+
+            function validatePasswords() {
+                let isValid = true;
+                let messages = [];
+
+                const passValue = password.value;
+                const confirmValue = confirm_password.value;
+
+                // Rule 1: Minimum length
+                if (passValue.length < 6) {
+                    messages.push('<p class="invalid">✗ At least 6 characters long</p>');
+                    isValid = false;
+                } else {
+                    messages.push('<p class="valid">✓ At least 6 characters long</p>');
+                }
+
+                // Rule 2: Contains a number
+                if (!/\d/.test(passValue)) {
+                    messages.push('<p class="invalid">✗ Contains at least one number</p>');
+                    isValid = false;
+                } else {
+                    messages.push('<p class="valid">✓ Contains at least one number</p>');
+                }
+
+                // Rule 3: Contains uppercase letter
+                if (!/[A-Z]/.test(passValue)) {
+                    messages.push('<p class="invalid">✗ Contains at least one uppercase letter</p>');
+                    isValid = false;
+                } else {
+                    messages.push('<p class="valid">✓ Contains at least one uppercase letter</p>');
+                }
+
+                // Rule 4: Contains lowercase letter
+                if (!/[a-z]/.test(passValue)) {
+                    messages.push('<p class="invalid">✗ Contains at least one lowercase letter</p>');
+                    isValid = false;
+                } else {
+                    messages.push('<p class="valid">✓ Contains at least one lowercase letter</p>');
+                }
+
+                // Rule 5: Passwords match
+                if (confirmValue && passValue !== confirmValue) {
+                    messages.push('<p class="invalid">✗ Passwords match</p>');
+                    confirm_password.classList.add('invalid-border');
+                    confirm_password.classList.remove('valid-border');
+                    isValid = false;
+                } else if (confirmValue) {
+                    messages.push('<p class="valid">✓ Passwords match</p>');
+                    confirm_password.classList.add('valid-border');
+                    confirm_password.classList.remove('invalid-border');
+                } else {
+                    confirm_password.classList.remove('valid-border', 'invalid-border');
+                }
+                
+                message.innerHTML = messages.join('');
+                
+                // Update password field border
+                if (isValid && passValue.length > 0) {
+                    password.classList.add('valid-border');
+                    password.classList.remove('invalid-border');
+                } else if (passValue.length > 0) {
+                    password.classList.add('invalid-border');
+                    password.classList.remove('valid-border');
+                } else {
+                    password.classList.remove('valid-border', 'invalid-border');
+                }
+
+                return isValid && (passValue === confirmValue);
+            }
+
+            // Add event listeners for real-time feedback
+            password.addEventListener('keyup', validatePasswords);
+            confirm_password.addEventListener('keyup', validatePasswords);
+
+            // Final check on form submission
+            form.addEventListener('submit', function(event) {
+                if (!validatePasswords()) {
+                    event.preventDefault(); // Stop form submission if validation fails
+                    alert('Please ensure your password meets all the requirements.');
+                }
+            });
+        });
     </script>
 </body>
 </html>
-

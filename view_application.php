@@ -9,7 +9,7 @@ $application_id = intval($_GET['id']);
 $current_user_id = $_SESSION['user_id'];
 $current_user_role = $_SESSION['role'];
 
-// --- FIX 1: The SQL Query is updated here ---
+// This SQL now includes the new signature path columns
 $sql = "SELECT a.*, u.full_name, u.email, u.college_id, ut.id as undertaking_id 
         FROM applications a 
         JOIN users u ON a.student_id = u.id 
@@ -28,7 +28,10 @@ $docs_stmt = $conn->prepare($docs_sql);
 $docs_stmt->bind_param("i", $application_id);
 $docs_stmt->execute();
 $docs_result = $docs_stmt->get_result();
-$uploaded_pdf = $docs_result->fetch_assoc();
+$uploaded_pdf = null;
+if($docs_result->num_rows > 0){
+    $uploaded_pdf = $docs_result->fetch_assoc();
+}
 $docs_stmt->close();
 
 $approval_sql = "SELECT ap.decision, ap.remarks, ap.created_at, u.full_name, u.role FROM approvals ap JOIN users u ON ap.approver_id = u.id WHERE ap.application_id = ? ORDER BY ap.created_at ASC";
@@ -37,14 +40,18 @@ $approval_stmt->bind_param("i", $application_id);
 $approval_stmt->execute();
 $approval_history = $approval_stmt->get_result();
 
+// MODIFIED: Update approval conditions
 $can_approve = false;
 $show_signature_pad = false;
+$is_approved_final = ($app['status'] === 'Approved');
+
 if (($current_user_role == 'staff_advisor' && $app['status'] == 'Pending Staff Advisor') || 
     ($current_user_role == 'hod' && $app['status'] == 'Pending HOD Approval')) {
     $can_approve = true;
     $show_signature_pad = true;
 } elseif (($current_user_role == 'dqac' && $app['status'] == 'Pending DQAC Approval') ||
-          ($current_user_role == 'iqac' && $app['status'] == 'Pending IQAC Approval')) {
+          // IQAC can now approve from the flagged state too
+          ($current_user_role == 'iqac' && in_array($app['status'], ['Pending IQAC Approval', 'Pending Review (Low Rating)']))) {
     $can_approve = true;
 }
 ?>
@@ -65,13 +72,14 @@ if (($current_user_role == 'staff_advisor' && $app['status'] == 'Pending Staff A
         .main-content { flex-grow: 1; display: flex; flex-direction: column; }
         .content-area { padding: 30px; max-width: 900px; margin: auto; }
         .card { background-color: var(--card-bg); padding: 25px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 25px; }
-        h2 { border-bottom: 2px solid var(--navy-blue); padding-bottom: 10px; }
+        h2, h3 { border-bottom: 2px solid var(--navy-blue); padding-bottom: 10px; margin-top:0; }
         .details-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px 30px; }
         .details-grid strong { color: #334155; }
-        .doc-list li { list-style: none; padding: 5px 0; }
+        .doc-list { list-style: none; padding-left: 0; }
+        .doc-list li { padding: 5px 0; }
         .doc-list .fa-check-circle { color: #22c55e; } .doc-list .fa-times-circle { color: #ef4444; }
-        .approval-form textarea { width: 100%; padding: 10px; border-radius: 5px; border: 1px solid #ddd; }
-        .approval-form button { padding: 10px 20px; border: none; border-radius: 5px; color: #fff; cursor: pointer; }
+        .approval-form textarea, .signature-form textarea { width: 100%; padding: 10px; border-radius: 5px; border: 1px solid #ddd; }
+        .approval-form button, .signature-form button { padding: 10px 20px; border: none; border-radius: 5px; color: #fff; cursor: pointer; }
         .approve-btn { background-color: #22c55e; } .reject-btn { background-color: #ef4444; }
         #signature-pad { border: 1px solid #ccc; border-radius: 5px; }
         .signature-box img { max-width: 200px; border: 1px solid #eee; margin-top:5px; }
@@ -80,7 +88,7 @@ if (($current_user_role == 'staff_advisor' && $app['status'] == 'Pending Staff A
 </head>
 <body>
 <div class="main-layout">
-    <aside class="sidebar"><div class="sidebar-header"><h3><a href="<?php echo $current_user_role; ?>_dashboard.php" style="color:white; text-decoration:none;">Back to Dashboard</a></h3></div></aside>
+    <aside class="sidebar"><div class="sidebar-header"><h3><a href="<?php echo htmlspecialchars($current_user_role); ?>_dashboard.php" style="color:white; text-decoration:none;">Back to Dashboard</a></h3></div></aside>
     <div class="main-content">
         <main class="content-area">
             <div class="card">
@@ -109,120 +117,143 @@ if (($current_user_role == 'staff_advisor' && $app['status'] == 'Pending Staff A
                     <li><i class="<?php echo $app['doc_team_consent'] ? 'fa-solid fa-check-circle' : 'fa-solid fa-times-circle'; ?>"></i> Team Consent Letter</li>
                     <?php endif; ?>
                 </ul>
+                <?php if ($uploaded_pdf && !empty($uploaded_pdf['file_path'])): ?>
                 <hr style="border:0; border-top:1px solid #eee; margin: 20px 0;">
-                <a href="uploads/<?php echo htmlspecialchars($uploaded_pdf['file_path']); ?>" target="_blank" style="font-weight:bold;">View Uploaded PDF Document</a>
+               
+<a href="uploads/<?php echo htmlspecialchars($uploaded_pdf['file_path']); ?>" target="_blank" style="font-weight:bold;">View Uploaded PDF Document</a>
+                <?php endif; ?>
             </div>
             
             <?php if ($can_approve): ?>
             <div class="card approval-form">
                 <h3>Your Action</h3>
-                <form id="approvalForm" action="handle_approval.php" method="POST" enctype="multipart/form-data">
+                <form id="approvalForm" action="handle_approval.php" method="POST">
                     <input type="hidden" name="application_id" value="<?php echo $application_id; ?>">
                     <input type="hidden" name="decision" id="decisionInput">
                     <input type="hidden" name="signature" id="signatureInput">
                     <div style="margin-bottom: 15px;">
                         <label>Remarks (Required for rejection)</label>
-                        <textarea name="remarks" id="remarksInput" rows="4"></textarea>
+                        <textarea name="remarks" id="remarksInput" rows="4"><?php echo htmlspecialchars($app['remarks']); ?></textarea>
                     </div>
                     <?php if ($show_signature_pad): ?>
                     <div style="margin-bottom: 15px;">
                         <label>Digital Signature (Required for Approval)</label>
                         <canvas id="signature-pad" width="400" height="200"></canvas>
                         <button type="button" id="clear-signature" style="background-color: #64748b;">Clear</button>
-                        <p style="margin-top:10px;">Or upload signature image:</p>
-                        <input type="file" id="signature-upload" accept="image/*">
-                        <img id="signature-preview">
                     </div>
                     <?php endif; ?>
-                    <div>
-                        <button type="submit" name="approve" class="approve-btn">Approve</button>
-                        <button type="submit" name="reject" class="reject-btn">Reject</button>
-                    </div>
+                   <div>
+    <?php if ($current_user_role === 'dqac'): ?>
+        <button type="submit" name="approve" class="approve-btn">
+            <i class="fa-solid fa-share-from-square"></i> Forward to IQAC
+        </button>
+    <?php else: ?>
+        <button type="submit" name="approve" class="approve-btn">
+            <i class="fa-solid fa-check"></i> Approve
+        </button>
+    <?php endif; ?>
+
+    <button type="submit" name="reject" class="reject-btn">
+        <i class="fa-solid fa-times"></i> Reject
+    </button>
+</div>
                 </form>
             </div>
             <?php endif; ?>
 
-            <?php if($approval_history->num_rows > 0 || $app['staff_advisor_signature_path'] || $app['hod_signature_path']): ?>
             <div class="card">
                 <h3>Approval History & Signatures</h3>
-                <?php if($app['staff_advisor_signature_path']): ?>
-                    <div class="signature-box"><p><strong>Staff Advisor Signature:</strong></p><img src="<?php echo htmlspecialchars($app['staff_advisor_signature_path']); ?>"></div>
-                <?php endif; ?>
-                <?php if($app['hod_signature_path']): ?>
-                     <div class="signature-box"><p><strong>HOD Signature:</strong></p><img src="<?php echo htmlspecialchars($app['hod_signature_path']); ?>"></div>
-                <?php endif; ?>
-                <ul>
+                <div class="details-grid">
+                    <?php if($app['staff_advisor_signature_path']): ?>
+                        <div class="signature-box"><p><strong>Staff Advisor Signature:</strong></p><img src="<?php echo htmlspecialchars($app['staff_advisor_signature_path']); ?>"></div>
+                    <?php endif; ?>
+                    <?php if($app['hod_signature_path']): ?>
+                        <div class="signature-box"><p><strong>HOD Signature:</strong></p><img src="<?php echo htmlspecialchars($app['hod_signature_path']); ?>"></div>
+                    <?php endif; ?>
+                    <?php if($app['principal_signature_path']): ?>
+                        <div class="signature-box"><p><strong>Principal Signature:</strong></p><img src="<?php echo htmlspecialchars($app['principal_signature_path']); ?>"></div>
+                    <?php endif; ?>
+                    <?php if($app['dean_ug_signature_path']): ?>
+                        <div class="signature-box"><p><strong>Dean UG Signature:</strong></p><img src="<?php echo htmlspecialchars($app['dean_ug_signature_path']); ?>"></div>
+                    <?php endif; ?>
+                </div>
+                <ul style="padding-left: 20px; margin-top: 20px;">
                 <?php while($row = $approval_history->fetch_assoc()): ?>
                     <li><strong><?php echo $row['decision']; ?></strong> by <?php echo $row['full_name']; ?> (<?php echo ucwords(str_replace('_', ' ', $row['role'])); ?>) on <?php echo date('d M Y, h:i A', strtotime($row['created_at'])); ?>. Remarks: <?php echo htmlspecialchars($row['remarks'] ? $row['remarks'] : 'N/A'); ?></li>
                 <?php endwhile; ?>
                 </ul>
             </div>
+
+            <?php if ($is_approved_final && $current_user_role == 'iqac'): ?>
+            <div class="card">
+                <h3>Upload Final Signatures</h3>
+                <form class="signature-form" action="handle_approval.php" method="POST" enctype="multipart/form-data">
+                    <input type="hidden" name="application_id" value="<?php echo $app['id']; ?>">
+                    <input type="hidden" name="action" value="upload_final_signatures">
+                    <div class="details-grid">
+                        <div>
+                            <strong>Principal's Signature</strong>
+                            <?php if ($app['principal_signature_path']): ?>
+                                <p>Already uploaded.</p>
+                            <?php else: ?>
+                                <input type="file" name="principal_signature" accept="image/*" required>
+                            <?php endif; ?>
+                        </div>
+                        <div>
+                            <strong>Dean UG's Signature</strong>
+                            <?php if ($app['dean_ug_signature_path']): ?>
+                                <p>Already uploaded.</p>
+                            <?php else: ?>
+                                <input type="file" name="dean_ug_signature" accept="image/*" required>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <?php if (!$app['principal_signature_path'] || !$app['dean_ug_signature_path']): ?>
+                        <button type="submit" class="approve-btn" style="margin-top:20px;">
+                            <i class="fa-solid fa-upload"></i> Upload Signatures
+                        </button>
+                    <?php endif; ?>
+                </form>
+            </div>
             <?php endif; ?>
+
         </main>
     </div>
 </div>
 <script>
-const form = document.getElementById('approvalForm');
-const decisionInput = document.getElementById('decisionInput');
-const remarksInput = document.getElementById('remarksInput');
-const signatureUpload = document.getElementById('signature-upload');
-const signaturePreview = document.getElementById('signature-preview');
-const showSignaturePad = <?php echo $show_signature_pad ? 'true' : 'false'; ?>;
-
-let signaturePad = null;
-if (showSignaturePad && document.getElementById('signature-pad')) {
-    const canvas = document.getElementById('signature-pad');
-    signaturePad = new SignaturePad(canvas);
-    document.getElementById('clear-signature').addEventListener('click', () => signaturePad.clear());
-}
-
-if(signatureUpload){
-    signatureUpload.addEventListener('change', function(){
-        if(this.files && this.files[0]){
-            const reader = new FileReader();
-            reader.onload = function(e){
-                signaturePreview.src = e.target.result;
-                signaturePreview.style.display = 'block';
+document.addEventListener('DOMContentLoaded', function() {
+    const approvalForm = document.getElementById('approvalForm');
+    if (approvalForm) {
+        const decisionInput = document.getElementById('decisionInput');
+        const remarksInput = document.getElementById('remarksInput');
+        const showSignaturePad = <?php echo $show_signature_pad ? 'true' : 'false'; ?>;
+        let signaturePad = null;
+        if (showSignaturePad && document.getElementById('signature-pad')) {
+            const canvas = document.getElementById('signature-pad');
+            signaturePad = new SignaturePad(canvas);
+            document.getElementById('clear-signature').addEventListener('click', () => signaturePad.clear());
+        }
+        approvalForm.addEventListener('submit', function(event) {
+            const clickedButton = event.submitter;
+            if (clickedButton.name === 'approve') {
+                decisionInput.value = 'Approved';
+                if (showSignaturePad && signaturePad.isEmpty()) {
+                    alert('Signature is required for approval.');
+                    event.preventDefault();
+                    return;
+                }
+            } else if (clickedButton.name === 'reject') {
+                decisionInput.value = 'Rejected';
+                if (remarksInput.value.trim() === '') {
+                    alert('Remarks are required for rejection.');
+                    event.preventDefault();
+                    return;
+                }
             }
-            reader.readAsDataURL(this.files[0]);
-        } else {
-            signaturePreview.src = '';
-            signaturePreview.style.display = 'none';
-        }
-    });
-}
-
-form.addEventListener('submit', function(event) {
-    const clickedButton = event.submitter;
-    if (clickedButton.name === 'approve') {
-        decisionInput.value = 'Approved';
-        if (showSignaturePad && signaturePad.isEmpty() && (!signatureUpload || !signatureUpload.files.length)) {
-            alert('Signature is required for approval.');
-            event.preventDefault();
-            return;
-        }
-    } else if (clickedButton.name === 'reject') {
-        decisionInput.value = 'Rejected';
-        if (remarksInput.value.trim() === '') {
-            alert('Remarks are required for rejection.');
-            event.preventDefault();
-            return;
-        }
-    }
-
-    if (showSignaturePad) {
-        if (signatureUpload && signatureUpload.files.length) {
-            const file = signatureUpload.files[0];
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                document.getElementById('signatureInput').value = e.target.result;
-                form.submit();
+            if (showSignaturePad && !signaturePad.isEmpty()) {
+                document.getElementById('signatureInput').value = signaturePad.toDataURL('image/png');
             }
-            reader.readAsDataURL(file);
-            event.preventDefault();
-        } else if (!signaturePad.isEmpty()) {
-            document.getElementById('signatureInput').value = signaturePad.toDataURL('image/png');
-        }
+        });
     }
 });
 </script>

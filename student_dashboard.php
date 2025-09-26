@@ -28,10 +28,13 @@ $status_classes = [
     'Pending DQAC Approval' => 'pending-dqac-approval',
     'Pending IQAC Approval' => 'pending-iqac-approval',
     'Approved' => 'approved',
+    'Rejected' => 'rejected',
+    'Rejected (Low Rating)' => 'rejected',
     'Rejected by Staff Advisor' => 'rejected-by-staff-advisor',
     'Rejected by HOD' => 'rejected-by-hod',
     'Rejected by DQAC' => 'rejected-by-dqac',
-    'Rejected by Iqac' => 'rejected-by-iqac'
+    'Rejected by Iqac' => 'rejected-by-iqac',
+    'Pending Review (Low Rating)' => 'pending-review-low-rating'
 ];
 ?>
 <!DOCTYPE html>
@@ -78,10 +81,11 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Ro
 .status.pending-dqac-approval { background-color: #0ea5e9; }
 .status.pending-iqac-approval { background-color: #d946ef; }
 .status.approved { background-color: #22c55e; }
-.status.rejected-by-staff-advisor, .status.rejected-by-hod, .status.rejected-by-dqac, .status.rejected-by-iqac { background-color: #ef4444; }
+.status.rejected, .status.rejected-by-staff-advisor, .status.rejected-by-hod, .status.rejected-by-dqac, .status.rejected-by-iqac { background-color: #ef4444; }
 .rating-badge { padding: 4px 10px; border-radius: 5px; color: white; font-weight: 500; font-size: 0.85rem; }
 .rating-low { background-color: red; }
 .rating-high { background-color: green; }
+.status.pending-review-low-rating { background-color: #e2e8f0; color: #1e293b; }
 </style>
 </head>
 <body>
@@ -115,15 +119,18 @@ body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Ro
                             <td>
                                 <?php
                                 $rating = $row['rating'] ?? 0;
-                                $badge_class = ($rating < 3) ? 'rating-low' : 'rating-high';
-                                echo "<span class='rating-badge $badge_class'>$rating</span>";
+                                $badge_class = ($rating < 30) ? 'rating-low' : 'rating-high';
+                                echo "<span class='rating-badge $badge_class'>$rating%</span>";
                                 ?>
                             </td>
                             <td><?php echo date('d M, Y', strtotime($row['submitted_at'])); ?></td>
                             <td>
                                 <?php
+                                // --- THIS IS THE FIX ---
+                                // This simplified code now displays the full status from the database
+                                $status_text = htmlspecialchars($row['status']);
                                 $class = $status_classes[$row['status']] ?? '';
-                                echo "<span class='status $class'>".htmlspecialchars($row['status'])."</span>";
+                                echo "<span class='status $class'>".$status_text."</span>";
                                 ?>
                             </td>
                             <td><a href="view_application.php?id=<?php echo $row['id']; ?>">View Details</a></td>
